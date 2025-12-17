@@ -240,7 +240,7 @@ Contributions welcome! Feel free to:
 
 MIT License - see LICENSE file for details
 
-## 👤 Author
+## Author
 
 **Sumedh R. Sankhe**
 - Portfolio: [sumedhsankhe.github.io](https://sumedhsankhe.github.io)
@@ -249,6 +249,6 @@ MIT License - see LICENSE file for details
 
 ---
 
-⭐ If you found this helpful, consider starring the repository!
+If you found this helpful, consider starring the repository!
 
 Built with practical experience from deploying production R Shiny applications on Azure Kubernetes Service.
