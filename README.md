@@ -35,7 +35,7 @@ This repository demonstrates a **multistage Docker build approach** that:
 
 ```bash
 # Clone the repository
-git clone https://github.com/YOUR_USERNAME/shiny-docker-optimization.git
+git clone https://github.com/SumedhSankhe/shiny-docker-optimization.git
 cd shiny-docker-optimization
 
 # Build single-stage version (BEFORE)
