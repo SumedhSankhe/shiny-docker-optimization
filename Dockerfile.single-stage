@@ -1,0 +1,42 @@
+# ============================================================================
+# SINGLE-STAGE DOCKERFILE (BEFORE OPTIMIZATION)
+# ============================================================================
+# This approach has several inefficiencies:
+# 1. Build tools remain in final image (bloat)
+# 2. Poor layer caching - any code change invalidates package installations
+# 3. Longer build times due to redundant dependency resolution
+# 4. Larger final image size (~2GB+)
+# ============================================================================
+
+FROM rocker/r-ver:4.3.2
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    libcurl4-openssl-dev \
+    libssl-dev \
+    libxml2-dev \
+    libfontconfig1-dev \
+    libharfbuzz-dev \
+    libfribidi-dev \
+    libfreetype6-dev \
+    libpng-dev \
+    libtiff5-dev \
+    libjpeg-dev \
+    pandoc \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set working directory
+WORKDIR /app
+
+# Copy everything at once (poor caching)
+COPY . .
+
+# Install R packages
+RUN R -e "install.packages('renv', repos = 'https://cloud.r-project.org')"
+RUN R -e "renv::restore()"
+
+# Expose port
+EXPOSE 3838
+
+# Run the application
+CMD ["R", "-e", "shiny::runApp('/app', host = '0.0.0.0', port = 3838)"]

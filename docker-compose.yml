@@ -1,0 +1,33 @@
+version: '3.8'
+
+services:
+  # Single-stage build (for comparison)
+  shiny-single:
+    build:
+      context: .
+      dockerfile: Dockerfile.single-stage
+    image: shiny-app:single
+    container_name: shiny-single-stage
+    ports:
+      - "3838:3838"
+    restart: unless-stopped
+    # Uncomment to run this version
+    # profiles:
+    #   - single
+
+  # Multistage build (optimized)
+  shiny-optimized:
+    build:
+      context: .
+      dockerfile: Dockerfile.multistage
+    image: shiny-app:optimized
+    container_name: shiny-optimized
+    ports:
+      - "3838:3838"
+    restart: unless-stopped
+    # This is the default service to run
+
+# Usage:
+# docker-compose up            # Runs optimized version
+# docker-compose up shiny-single  # Runs single-stage version
+# docker-compose down          # Stop and remove containers
