@@ -6,7 +6,7 @@
 
 A practical demonstration of Docker optimization techniques for R Shiny applications, showing how multistage builds can reduce image size by 40-50% and improve build times through better layer caching.
 
-## 📊 The Problem
+## The Problem
 
 When deploying production R Shiny applications, standard single-stage Dockerfiles often result in:
 
@@ -15,7 +15,7 @@ When deploying production R Shiny applications, standard single-stage Dockerfile
 - **Frequent rebuilds** when application code changes invalidate dependency layers
 - **Bloated deployments** with unnecessary build dependencies in production
 
-## ✨ The Solution
+## The Solution
 
 This repository demonstrates a **multistage Docker build approach** that:
 
@@ -24,7 +24,7 @@ This repository demonstrates a **multistage Docker build approach** that:
 3. **Reduces image size** - final images contain only runtime requirements
 4. **Speeds up CI/CD** - cached layers prevent redundant package installations
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Prerequisites
 
@@ -57,7 +57,7 @@ docker run -p 3838:3838 shiny-app:optimized
 # Access at http://localhost:3838
 ```
 
-## 📈 Performance Comparison
+## Performance Comparison
 
 | Metric | Single-Stage | Multistage | Improvement |
 |--------|-------------|------------|-------------|
@@ -68,7 +68,7 @@ docker run -p 3838:3838 shiny-app:optimized
 
 *Results may vary based on dependencies and hardware*
 
-## 🏗️ Architecture Deep Dive
+## Architecture Deep Dive
 
 ### Single-Stage Build (Before)
 
@@ -128,21 +128,21 @@ COPY --from=builder /build/app.R /app/app.R
 ```
 
 **Improvements:**
-1. ✅ Build tools excluded from final image
-2. ✅ Dependencies cached independently from code
-3. ✅ Minimal runtime image with only necessary libraries
-4. ✅ Faster rebuilds when code changes
+1. Build tools excluded from final image
+2. Dependencies cached independently from code
+3. Minimal runtime image with only necessary libraries
+4. Faster rebuilds when code changes
 
-## 🎯 Key Optimization Strategies
+## Key Optimization Strategies
 
 ### 1. Layer Ordering
 
 ```dockerfile
-# ❌ BAD: Code changes invalidate package installation
+# BAD: Code changes invalidate package installation
 COPY . .
 RUN R -e "renv::restore()"
 
-# ✅ GOOD: Packages cached unless dependencies change
+# GOOD: Packages cached unless dependencies change
 COPY renv.lock renv.lock
 RUN R -e "renv::restore()"
 COPY app.R app.R
@@ -173,7 +173,7 @@ COPY renv/activate.R renv/
 COPY app.R .
 ```
 
-## 📁 Repository Structure
+## Repository Structure
 
 ```
 shiny-docker-optimization/
@@ -188,7 +188,7 @@ shiny-docker-optimization/
 └── README.md                  # This file
 ```
 
-## 🔧 Customization Guide
+## Customization Guide
 
 ### Adapting for Your Application
 
@@ -221,14 +221,14 @@ shiny-docker-optimization/
 - **Environment variables**: Use ENV for configuration
 - **Secrets management**: Never hardcode credentials
 
-## 📚 Related Resources
+## Related Resources
 
 - [Docker Multistage Builds Documentation](https://docs.docker.com/build/building/multi-stage/)
 - [renv: R Dependency Management](https://rstudio.github.io/renv/)
 - [Rocker Project: Docker Images for R](https://rocker-project.org/)
 - [Production-Grade Shiny Apps](https://engineering-shiny.org/)
 
-## 🤝 Contributing
+## Contributing
 
 Contributions welcome! Feel free to:
 
@@ -236,7 +236,7 @@ Contributions welcome! Feel free to:
 - Submit PRs for improvements
 - Share your optimization results
 
-## 📄 License
+## License
 
 MIT License - see LICENSE file for details
 
