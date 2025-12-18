@@ -1,0 +1,151 @@
+# ============================================================================
+# THREE-STAGE DOCKERFILE (ADVANCED OPTIMIZATION)
+# ============================================================================
+# Architecture based on change frequency and package sources:
+#
+# BASE:    CRAN packages (stable, rarely change) + build tools
+# BUILDER: Custom/private packages (change independently from CRAN)
+# RUNTIME: Pure application + runtime libraries only (NO build tools)
+#
+# Key advantages:
+# 1. CRAN packages cached separately from custom packages
+# 2. Custom package changes don't invalidate CRAN package layer
+# 3. Runtime image is completely clean - no build tools whatsoever
+# 4. Optimal layer caching based on change frequency
+# ============================================================================
+
+# ============================================================================
+# STAGE 1: Base - CRAN packages and build environment
+# ============================================================================
+FROM rocker/r-ver:4.3.2 AS base
+
+# Install system dependencies needed for compilation AND runtime
+# Build tools are needed here to compile CRAN packages
+RUN apt-get update && apt-get install -y \
+    # Build tools (needed for CRAN package compilation)
+    libcurl4-openssl-dev \
+    libssl-dev \
+    libxml2-dev \
+    libfontconfig1-dev \
+    libharfbuzz-dev \
+    libfribidi-dev \
+    libfreetype6-dev \
+    libpng-dev \
+    libtiff5-dev \
+    libjpeg-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /base
+
+# OPTIMIZATION 1: Copy only dependency files first
+# This creates a cache-friendly layer that only rebuilds when CRAN dependencies change
+COPY renv.lock renv.lock
+COPY .Rprofile .Rprofile
+COPY renv/activate.R renv/activate.R
+COPY renv/settings.json renv/settings.json
+
+# OPTIMIZATION 2: Install renv and restore CRAN packages
+# This layer is cached unless renv.lock changes
+# CRAN packages change rarely, so this provides excellent caching
+RUN R -e "install.packages('renv', repos = 'https://cloud.r-project.org')"
+RUN R -e "renv::restore()"
+
+# ============================================================================
+# STAGE 2: Builder - Custom/private packages
+# ============================================================================
+FROM base AS builder
+
+# Inherit all CRAN packages and build tools from base
+# Add any additional build dependencies for custom packages here if needed
+# RUN apt-get update && apt-get install -y \
+#     <additional-build-deps> \
+#     && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+
+# Copy and build custom packages (not on CRAN)
+# These might be:
+# - Private packages from GitHub/GitLab
+# - Internal company packages
+# - Packages built from local source
+#
+# Example (uncomment and modify as needed):
+# COPY custom_packages/ custom_packages/
+# RUN R CMD INSTALL custom_packages/mypackage
+
+# For now, just inherit from base
+# In a real scenario, you'd install custom packages here:
+# RUN R -e "remotes::install_github('yourorg/yourpackage')"
+
+# Copy application code
+# This is the most frequently changing layer
+COPY app.R app.R
+
+# ============================================================================
+# STAGE 3: Runtime - Pure application (NO build tools)
+# ============================================================================
+FROM rocker/r-ver:4.3.2
+
+# Install ONLY runtime system dependencies (no -dev packages, no build tools)
+RUN apt-get update && apt-get install -y \
+    libcurl4 \
+    libssl3 \
+    libxml2 \
+    libfontconfig1 \
+    libharfbuzz0b \
+    libfribidi0 \
+    libfreetype6 \
+    libpng16-16 \
+    libtiff5 \
+    libjpeg62-turbo \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy CRAN packages from base stage
+COPY --from=base /base/renv /app/renv
+COPY --from=base /base/.Rprofile /app/.Rprofile
+COPY --from=base /base/renv.lock /app/renv.lock
+
+# Copy custom packages from builder stage (if any were installed)
+# COPY --from=builder /usr/local/lib/R/site-library/mypackage /usr/local/lib/R/site-library/mypackage
+
+# Copy application code from builder
+COPY --from=builder /build/app.R /app/app.R
+
+# Expose Shiny port
+EXPOSE 3838
+
+# Run the application
+CMD ["R", "-e", "shiny::runApp('/app', host = '0.0.0.0', port = 3838)"]
+
+# ============================================================================
+# Layer Optimization Strategy:
+# ============================================================================
+#
+# CRAN packages (base):        Changes LEAST frequently   → Cached most aggressively
+# Custom packages (builder):   Changes MORE frequently     → Independent cache layer
+# Application code (runtime):  Changes MOST frequently     → Doesn't invalidate above
+#
+# Build flow:
+# 1. Base layer compiles CRAN packages (cached unless renv.lock changes)
+# 2. Builder adds custom packages (cached unless custom package sources change)
+# 3. Runtime copies everything and adds application code
+# 4. Code changes only invalidate the final COPY app.R step
+#
+# ============================================================================
+# Build and Run Commands:
+# ============================================================================
+# Build (three-stage):
+#   docker build -f Dockerfile.three-stage -t shiny-app:three-stage .
+#
+# Run:
+#   docker run -p 3838:3838 shiny-app:three-stage
+#
+# Verify no build tools in runtime:
+#   docker run --rm shiny-app:three-stage dpkg -l | grep -E "dev|gcc|g\+\+"
+#   (should return nothing)
+#
+# Compare sizes:
+#   docker images | grep shiny-app
+# ============================================================================
