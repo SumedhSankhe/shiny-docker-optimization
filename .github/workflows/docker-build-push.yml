@@ -117,20 +117,23 @@ jobs:
 
       - name: Pull all images and compare sizes
         run: |
+          # Lowercase the image name (Docker registry requires lowercase)
+          IMAGE_NAME_LOWER=$(echo "${{ env.IMAGE_NAME }}" | tr '[:upper:]' '[:lower:]')
+
           echo "## Docker Image Size Comparison" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Variant | Size | Optimization |" >> $GITHUB_STEP_SUMMARY
           echo "|---------|------|--------------|" >> $GITHUB_STEP_SUMMARY
 
           # Pull and get sizes
-          docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:single-stage-latest || true
-          docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:two-stage-latest || true
-          docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:three-stage-latest || true
+          docker pull ${{ env.REGISTRY }}/${IMAGE_NAME_LOWER}:single-stage-latest || true
+          docker pull ${{ env.REGISTRY }}/${IMAGE_NAME_LOWER}:two-stage-latest || true
+          docker pull ${{ env.REGISTRY }}/${IMAGE_NAME_LOWER}:three-stage-latest || true
 
           # Get sizes
-          SINGLE_SIZE=$(docker images --format "{{.Size}}" ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:single-stage-latest 2>/dev/null || echo "N/A")
-          TWO_SIZE=$(docker images --format "{{.Size}}" ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:two-stage-latest 2>/dev/null || echo "N/A")
-          THREE_SIZE=$(docker images --format "{{.Size}}" ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:three-stage-latest 2>/dev/null || echo "N/A")
+          SINGLE_SIZE=$(docker images --format "{{.Size}}" ${{ env.REGISTRY }}/${IMAGE_NAME_LOWER}:single-stage-latest 2>/dev/null || echo "N/A")
+          TWO_SIZE=$(docker images --format "{{.Size}}" ${{ env.REGISTRY }}/${IMAGE_NAME_LOWER}:two-stage-latest 2>/dev/null || echo "N/A")
+          THREE_SIZE=$(docker images --format "{{.Size}}" ${{ env.REGISTRY }}/${IMAGE_NAME_LOWER}:three-stage-latest 2>/dev/null || echo "N/A")
 
           echo "| Single-stage | ${SINGLE_SIZE} | Baseline |" >> $GITHUB_STEP_SUMMARY
           echo "| Two-stage | ${TWO_SIZE} | ~40% smaller |" >> $GITHUB_STEP_SUMMARY
