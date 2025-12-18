@@ -17,7 +17,7 @@
 # ============================================================================
 # STAGE 1: Base - CRAN packages and build environment
 # ============================================================================
-FROM rocker/r-ver:4.3.2 AS base
+FROM rocker/r-ver:4.4.3 AS base
 
 # Install system dependencies needed for compilation AND runtime
 # Build tools are needed here to compile CRAN packages
@@ -84,10 +84,11 @@ COPY app.R app.R
 # ============================================================================
 # STAGE 3: Runtime - Pure application (NO build tools)
 # ============================================================================
-FROM rocker/r-ver:4.3.2
+FROM rocker/r-ver:4.4.3
 
 # Install ONLY runtime system dependencies (no -dev packages, no build tools)
-RUN apt-get update && apt-get install -y \
+# Note: Using minimal runtime libraries without -dev packages
+RUN apt-get update && apt-get install -y --no-install-recommends \
     libcurl4 \
     libssl3 \
     libxml2 \
@@ -95,9 +96,9 @@ RUN apt-get update && apt-get install -y \
     libharfbuzz0b \
     libfribidi0 \
     libfreetype6 \
-    libpng16-16 \
-    libtiff5 \
-    libjpeg62-turbo \
+    libpng16-16t64 \
+    libtiff6 \
+    libjpeg-turbo8 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

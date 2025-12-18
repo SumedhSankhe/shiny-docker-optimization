@@ -12,7 +12,7 @@
 # ============================================================================
 # STAGE 1: Builder - Install dependencies
 # ============================================================================
-FROM rocker/r-ver:4.3.2 AS builder
+FROM rocker/r-ver:4.4.3 AS builder
 
 # Install system dependencies needed for package compilation
 RUN apt-get update && apt-get install -y \
@@ -49,10 +49,11 @@ COPY app.R app.R
 # ============================================================================
 # STAGE 2: Runtime - Minimal production image
 # ============================================================================
-FROM rocker/r-ver:4.3.2
+FROM rocker/r-ver:4.4.3
 
 # Install ONLY runtime system dependencies (no build tools)
-RUN apt-get update && apt-get install -y \
+# Note: Using minimal runtime libraries without -dev packages
+RUN apt-get update && apt-get install -y --no-install-recommends \
     libcurl4 \
     libssl3 \
     libxml2 \
@@ -60,9 +61,9 @@ RUN apt-get update && apt-get install -y \
     libharfbuzz0b \
     libfribidi0 \
     libfreetype6 \
-    libpng16-16 \
-    libtiff5 \
-    libjpeg62-turbo \
+    libpng16-16t64 \
+    libtiff6 \
+    libjpeg-turbo8 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
