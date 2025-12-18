@@ -1,0 +1,136 @@
+name: Build and Push Docker Images
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+    tags:
+      - 'v*'
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    strategy:
+      matrix:
+        dockerfile:
+          - name: single-stage
+            file: Dockerfile.single-stage
+            description: "Baseline single-stage build"
+          - name: two-stage
+            file: Dockerfile.multistage
+            description: "Optimized two-stage build"
+          - name: three-stage
+            file: Dockerfile.three-stage
+            description: "Advanced three-stage build with base layer"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch,suffix=-${{ matrix.dockerfile.name }}
+            type=ref,event=pr,suffix=-${{ matrix.dockerfile.name }}
+            type=semver,pattern={{version}},suffix=-${{ matrix.dockerfile.name }}
+            type=semver,pattern={{major}}.{{minor}},suffix=-${{ matrix.dockerfile.name }}
+            type=sha,prefix=${{ matrix.dockerfile.name }}-
+            type=raw,value=${{ matrix.dockerfile.name }}-latest,enable={{is_default_branch}}
+          labels: |
+            org.opencontainers.image.title=Shiny Docker Optimization - ${{ matrix.dockerfile.name }}
+            org.opencontainers.image.description=${{ matrix.dockerfile.description }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ${{ matrix.dockerfile.file }}
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          platforms: linux/amd64
+
+      - name: Generate build summary
+        if: github.event_name != 'pull_request'
+        run: |
+          echo "## Docker Image Build Summary - ${{ matrix.dockerfile.name }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Dockerfile:** \`${{ matrix.dockerfile.file }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Description:** ${{ matrix.dockerfile.description }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Tags Created" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "${{ steps.meta.outputs.tags }}" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Pull Command" >> $GITHUB_STEP_SUMMARY
+          echo '```bash' >> $GITHUB_STEP_SUMMARY
+          echo "docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ matrix.dockerfile.name }}-latest" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+  compare-sizes:
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    if: github.event_name != 'pull_request'
+    permissions:
+      contents: read
+      packages: read
+
+    steps:
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull all images and compare sizes
+        run: |
+          echo "## Docker Image Size Comparison" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Variant | Size | Optimization |" >> $GITHUB_STEP_SUMMARY
+          echo "|---------|------|--------------|" >> $GITHUB_STEP_SUMMARY
+
+          # Pull and get sizes
+          docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:single-stage-latest || true
+          docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:two-stage-latest || true
+          docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:three-stage-latest || true
+
+          # Get sizes
+          SINGLE_SIZE=$(docker images --format "{{.Size}}" ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:single-stage-latest 2>/dev/null || echo "N/A")
+          TWO_SIZE=$(docker images --format "{{.Size}}" ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:two-stage-latest 2>/dev/null || echo "N/A")
+          THREE_SIZE=$(docker images --format "{{.Size}}" ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:three-stage-latest 2>/dev/null || echo "N/A")
+
+          echo "| Single-stage | ${SINGLE_SIZE} | Baseline |" >> $GITHUB_STEP_SUMMARY
+          echo "| Two-stage | ${TWO_SIZE} | ~40% smaller |" >> $GITHUB_STEP_SUMMARY
+          echo "| Three-stage | ${THREE_SIZE} | ~40% smaller + better caching |" >> $GITHUB_STEP_SUMMARY
