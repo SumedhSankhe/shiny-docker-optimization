@@ -39,4 +39,6 @@ RUN R -e "renv::restore()"
 EXPOSE 3838
 
 # Run the application
-CMD ["R", "-e", "shiny::runApp('/app', host = '0.0.0.0', port = 3838)"]
+# Note: Use --vanilla to skip .Rprofile and avoid renv activation at runtime
+# The renv library path is already in R's search path
+CMD ["R", "--vanilla", "-e", ".libPaths('/app/renv/library/linux-ubuntu-noble/R-4.4/x86_64-pc-linux-gnu'); shiny::runApp('/app', host = '0.0.0.0', port = 3838)"]
