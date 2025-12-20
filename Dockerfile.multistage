@@ -12,7 +12,11 @@
 # ============================================================================
 # STAGE 1: Builder - Install dependencies
 # ============================================================================
-FROM rocker/r-ver:4.4.3 AS builder
+FROM rocker/r2u:24.04 AS builder
+
+# Configure renv cache to use the same path as runtime
+# This ensures symlinks remain valid when copied to runtime stage
+ENV RENV_PATHS_CACHE="/app/renv/.cache"
 
 # Install system dependencies needed for package compilation
 RUN apt-get update && apt-get install -y \
@@ -28,7 +32,7 @@ RUN apt-get update && apt-get install -y \
     libjpeg-dev \
     && rm -rf /var/lib/apt/lists/*
 
-WORKDIR /build
+WORKDIR /app
 
 # OPTIMIZATION 1: Copy only dependency files first
 # This creates a cache-friendly layer that only rebuilds when dependencies change
@@ -49,7 +53,10 @@ COPY app.R app.R
 # ============================================================================
 # STAGE 2: Runtime - Minimal production image
 # ============================================================================
-FROM rocker/r-ver:4.4.3
+FROM rocker/r2u:24.04
+
+# Configure renv cache location to match where packages were installed
+ENV RENV_PATHS_CACHE="/app/renv/.cache"
 
 # Install ONLY runtime system dependencies (no build tools)
 # Note: Using minimal runtime libraries without -dev packages
@@ -68,16 +75,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Copy the entire renv library from builder stage
-COPY --from=builder /build/renv /app/renv
-COPY --from=builder /build/.Rprofile /app/.Rprofile
-COPY --from=builder /build/renv.lock /app/renv.lock
-
-# Copy the renv cache (symlinks in renv/library point to this cache)
-COPY --from=builder /root/.cache/R/renv /root/.cache/R/renv
+# Copy the entire renv library from builder stage (includes cache at /app/renv/.cache)
+COPY --from=builder /app/renv /app/renv
+COPY --from=builder /app/.Rprofile /app/.Rprofile
+COPY --from=builder /app/renv.lock /app/renv.lock
 
 # Copy application code
-COPY --from=builder /build/app.R /app/app.R
+COPY --from=builder /app/app.R /app/app.R
 
 # Expose Shiny port
 EXPOSE 3838
@@ -85,7 +89,7 @@ EXPOSE 3838
 # Run the application
 # Note: Use --vanilla to skip .Rprofile and avoid renv activation at runtime
 # The renv library path is already in R's search path
-CMD ["R", "--vanilla", "-e", ".libPaths('/app/renv/library/linux-ubuntu-noble/R-4.4/x86_64-pc-linux-gnu'); shiny::runApp('/app', host = '0.0.0.0', port = 3838)"]
+CMD ["R", "--vanilla", "-e", ".libPaths('/app/renv/library/linux-ubuntu-noble/R-4.5/x86_64-pc-linux-gnu'); shiny::runApp('/app', host = '0.0.0.0', port = 3838)"]
 
 # ============================================================================
 # Build and Run Commands:

@@ -17,7 +17,11 @@
 # ============================================================================
 # STAGE 1: Base - CRAN packages and build environment
 # ============================================================================
-FROM rocker/r-ver:4.4.3 AS base
+FROM rocker/r2u:24.04 AS base
+
+# Configure renv cache to use the same path as runtime
+# This ensures symlinks remain valid when copied to runtime stage
+ENV RENV_PATHS_CACHE="/app/renv/.cache"
 
 # Install system dependencies needed for compilation AND runtime
 # Build tools are needed here to compile CRAN packages
@@ -35,7 +39,7 @@ RUN apt-get update && apt-get install -y \
     libjpeg-dev \
     && rm -rf /var/lib/apt/lists/*
 
-WORKDIR /base
+WORKDIR /app
 
 # OPTIMIZATION 1: Copy only dependency files first
 # This creates a cache-friendly layer that only rebuilds when CRAN dependencies change
@@ -84,7 +88,10 @@ COPY app.R app.R
 # ============================================================================
 # STAGE 3: Runtime - Pure application (NO build tools)
 # ============================================================================
-FROM rocker/r-ver:4.4.3
+FROM rocker/r2u:24.04
+
+# Configure renv cache location to match where packages were installed
+ENV RENV_PATHS_CACHE="/app/renv/.cache"
 
 # Install ONLY runtime system dependencies (no -dev packages, no build tools)
 # Note: Using minimal runtime libraries without -dev packages
@@ -103,13 +110,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Copy CRAN packages from base stage
-COPY --from=base /base/renv /app/renv
-COPY --from=base /base/.Rprofile /app/.Rprofile
-COPY --from=base /base/renv.lock /app/renv.lock
-
-# Copy the renv cache (symlinks in renv/library point to this cache)
-COPY --from=base /root/.cache/R/renv /root/.cache/R/renv
+# Copy CRAN packages from base stage (includes cache at /app/renv/.cache)
+COPY --from=base /app/renv /app/renv
+COPY --from=base /app/.Rprofile /app/.Rprofile
+COPY --from=base /app/renv.lock /app/renv.lock
 
 # Copy custom packages from builder stage (if any were installed)
 # COPY --from=builder /usr/local/lib/R/site-library/mypackage /usr/local/lib/R/site-library/mypackage
@@ -123,7 +127,7 @@ EXPOSE 3838
 # Run the application
 # Note: Use --vanilla to skip .Rprofile and avoid renv activation at runtime
 # The renv library path is already in R's search path
-CMD ["R", "--vanilla", "-e", ".libPaths('/app/renv/library/linux-ubuntu-noble/R-4.4/x86_64-pc-linux-gnu'); shiny::runApp('/app', host = '0.0.0.0', port = 3838)"]
+CMD ["R", "--vanilla", "-e", ".libPaths('/app/renv/library/linux-ubuntu-noble/R-4.5/x86_64-pc-linux-gnu'); shiny::runApp('/app', host = '0.0.0.0', port = 3838)"]
 
 # ============================================================================
 # Layer Optimization Strategy:
