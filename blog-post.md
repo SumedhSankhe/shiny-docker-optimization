@@ -1,20 +1,20 @@
 ---
-title: "Optimizing R Shiny Docker Builds: From 40 Minutes to 10 Minutes"
+title: "Optimizing R Shiny Docker Builds: Warm vs Cold Build Strategy"
 date: 2024-12-16
 author: Sumedh R. Sankhe
 tags: [Docker, R, Shiny, DevOps, Performance, Kubernetes, SaaS]
-description: "How we reduced Docker build times by 80% and image sizes by 42% for a customer-facing R Shiny SaaS application using multistage builds with rocker/r2u"
+description: "How we optimized Docker builds for a customer-facing R Shiny SaaS application by separating code changes (8-15 min) from dependency changes (40 min) and reduced image sizes by 42%"
 ---
 
-# Optimizing R Shiny Docker Builds: From 40 Minutes to 10 Minutes
+# Optimizing R Shiny Docker Builds: Warm vs Cold Build Strategy
 
-This is my first time writing up a technical blog post, so bear with me. I'm going to share what I learned optimizing Docker builds for R Shiny apps, including all the mistakes I made along the way.
+This is my first time writing up a technical blog post, so bear with me. I'm going to share what we learned optimizing Docker builds for R Shiny apps, including the things that broke along the way.
 
-At Alamar Biosciences, I work on the NULISA Analysis Software (NAS) - basically a Shiny app for analyzing proteomics data. Unlike typical internal Shiny apps deployed with Posit Connect, NAS is a **customer-facing SaaS application** running on Azure Kubernetes Service (AKS). Our customers access it directly for analyzing their proteomics experiments, which means deployment speed, reliability, and scalability matter differently than for internal tools.
+At Alamar Biosciences, I work on the NULISA Analysis Software (NAS) - a **large-scale, customer-facing SaaS application** for analyzing proteomics data, built with R Shiny and running on Azure Kubernetes Service (AKS). NAS is used by customers across academia and industry worldwide as a free cloud service. Unlike typical internal Shiny apps deployed with Posit Connect, NAS serves external customers directly, which means deployment speed, reliability, and scalability are critical for customer satisfaction and platform availability.
 
-When I started, our Docker builds were painfully slow. Like, grab coffee, queue some villagers in AoE2, maybe respond to some emails slow. A simple one-line code change? Wait 40 minutes for Docker to rebuild the image. Our images were pushing 1.5GB compressed. Every deployment to Kubernetes felt like it took forever. When you're shipping features to customers and fixing production bugs, 40-minute build times kill your velocity.
+Our Docker builds were taking 20-25 minutes. Every. Single. Build. It didn't matter if you changed one line of code or overhauled the entire data processing pipeline—Docker would reinstall all 200+ R packages from scratch. A simple bug fix? Wait 25 minutes. Testing a UI tweak? Another 25 minutes. Our images were pushing 1.5GB compressed to Azure Container Registry. When you're shipping features to customers and fixing production bugs, treating every build the same kills your velocity.
 
-This post walks through how I cut Docker build times by 80% for code changes (40 mins → 8-15 mins) and reduced image sizes by 42% (1.5GB → 875MB). The optimization involves separating build from runtime using Docker multistage builds and leveraging rocker/r2u for binary package installation. More importantly, this post covers the things that broke along the way and how I fixed them.
+This post walks through the optimizations we implemented in late 2025 that fundamentally changed how we build Docker images. The key insight: **separate code changes from dependency changes**. Now, the common case (code changes) builds in 8-15 minutes—a 60-68% improvement—while dependency updates take longer (40 mins) but happen infrequently. We also reduced image sizes by 42% (1.5GB → 870MB compressed in ACR). The optimization involves splitting stable CRAN dependencies into a base image, leveraging rocker/r2u for binary package installation, and properly structuring multistage builds. More importantly, this post covers the things that broke along the way and how we fixed them.
 
 ## The Problem: Slow, Bloated Docker Images
 
@@ -58,13 +58,13 @@ Our final images had everything needed to build the app, not just run it. All th
 Here's what our Azure Kubernetes deployment looked like:
 1. Push a code change (bug fix, new feature, etc.)
 2. GitHub Actions starts building
-3. Wait 40 minutes (go get coffee, check Slack, lose focus)
+3. Wait 20-25 minutes (go get coffee, check Slack, lose focus)
 4. Push to Azure Container Registry
 5. Deploy to AKS
 
 Those build times killed productivity. You'd push a fix, then switch to something else while waiting. By the time the build finished, you'd forgotten what you were even working on. It was like waiting for a Wonder to be built while your opponents are rushing you with trebuchets.
 
-**Why this matters for SaaS:** With Posit Connect, you typically deploy once and iterate internally. With a customer-facing SaaS on Kubernetes, you're constantly shipping features, bug fixes, and updates. Fast build times directly impact how quickly you can respond to customer issues and ship improvements. A 40-minute build cycle means you can only deploy 2-3 times per day max. That's not acceptable for modern SaaS development.
+**Why this matters for SaaS:** With Posit Connect, you typically deploy once and iterate internally. With a customer-facing SaaS on Kubernetes, you're constantly shipping features, bug fixes, and updates. Fast build times directly impact how quickly you can respond to customer issues and ship improvements. A 25-minute build cycle for every code change means you can only deploy a handful of times per day. That's not acceptable for modern SaaS development.
 
 ## The Solution: Multistage Docker Builds
 
@@ -198,24 +198,32 @@ Here are the real numbers from our GitHub Actions workflow on the demo repo:
 
 | Metric | Single-Stage | Two-Stage | Three-Stage | Improvement |
 |--------|-------------|-----------|-------------|-------------|
-| **Image size (uncompressed)** | 1.89 GB | 1.44 GB | 1.44 GB | **24% smaller** |
-| **Image size (compressed/registry)** | 512 MB | 403 MB | 403 MB | **21% smaller** |
-| **Warm build** (code change only) | 5-7 mins | 30-45s | 30-45s | **85-92% faster** |
+| **Image size (GHCR)** | 1.27 GB | 948 MB | 948 MB | **25% smaller** |
+| **Warm build** (code change only) | 5-7 mins | ~30s | ~30s | **92-94% faster** |
 | **Cold build** (no cache) | 8-10 mins | 6-8 mins | 6-8 mins | 20-25% faster |
 
 For our production NAS application with 200+ CRAN packages and 2 custom in-house packages:
 
-| Metric | Before (Single-Stage) | After (Three-Stage) | Improvement |
-|--------|----------------------|---------------------|-------------|
-| **Image size (compressed)** | 1.5 GB | 875 MB | **42% smaller** |
-| **Cold build** (all layers) | 40 mins | 30-35 mins | **20-25% faster** |
-| **Warm build** (code change only) | 40 mins | 8-15 mins | **70-80% faster** |
+| Metric | Before (NAS 1.3) | After (NAS 1.4) | Improvement |
+|--------|------------------|-----------------|-------------|
+| **Image size (ACR compressed)** | 1.5 GB | 870 MB | **42% smaller** |
+| **Warm build** (code change only) | 20-25 mins | 8-15 mins | **60-68% faster** |
+| **Cold build** (dependency change) | 20-25 mins | 40 mins | Slower, but infrequent |
 
 **Note:** Our production setup includes additional optimizations beyond the scope of this post: automated base image rebuilds triggered by renv.lock hash changes, cache-busting strategies for custom package updates, and GitHub Actions runner cleanup for multi-stage builds. These advanced CI/CD integrations will be covered in a follow-up post.
 
-**Note on image sizes:** Container registries (like Azure Container Registry, Docker Hub, GitHub Container Registry) store images in compressed format, which is why the "compressed/registry" sizes are significantly smaller than what you see locally with `docker images`. When you push an image to a registry, Docker compresses the layers, typically achieving 25-35% of the uncompressed size. This is important when considering deployment times and registry storage costs.
+**Note on image sizes:** The sizes shown are **compressed sizes** as stored in container registries (ACR/GHCR). These are the sizes that matter for:
+- Registry storage costs
+- Network transfer time during push/pull
+- Initial deployment speed to Kubernetes
 
-**Note on warm builds:** Even single-stage Dockerfiles can have warm builds if you structure the layers correctly. The problem is that most single-stage setups use `COPY . .` early, which invalidates package installation on every code change. Our original single-stage Dockerfile had this issue, which is why warm builds were still slow.
+Container registries compress images to about 25-35% of their uncompressed size. So the 870MB compressed NAS image is ~2.2-2.6GB when uncompressed on disk. The demo app achieves a 25% reduction in registry size, while our production NAS app sees a 42% reduction (1.5GB → 870MB in ACR).
+
+**Note on warm vs cold builds:** The key optimization is **distinguishing between these two scenarios**. Our original setup treated every build the same—changing one line of code triggered a full 20-25 minute rebuild with all packages reinstalled. The optimized approach separates:
+- **Warm builds** (90% of builds): Code changes only → 8-15 mins
+- **Cold builds** (10% of builds): Dependency changes → 40 mins (longer, but comprehensive and cached)
+
+Yes, cold builds are now slower, but they happen rarely (when you add/update packages). The common case (shipping code) is 60-68% faster.
 
 The full CI/CD pipeline includes additional steps beyond the Docker build: running unit tests, extracting test results, publishing them to GitHub, security scanning, etc. That's why the end-to-end time is longer than just the Docker build. The unit testing integration will be covered in a separate blog post.
 
@@ -235,12 +243,16 @@ RUN R -e "renv::restore()"  # So this has to run again. Every time.
 
 **The right way:**
 ```dockerfile
-COPY renv.lock .            # Only changes when you add/remove packages
-RUN R -e "renv::restore()"  # Gets cached and reused for code changes
-COPY app.R .                # Changes all the time, but doesn't break cache above
+COPY renv.lock .            # Only changes when you add/remove packages (COLD build)
+RUN R -e "renv::restore()"  # Gets cached and reused for code changes (enables WARM builds)
+COPY app.R .                # Changes all the time, but doesn't break cache above (WARM build)
 ```
 
-That simple reordering is the entire reason warm builds went from 8-10 minutes to 30 seconds. Put your stable stuff first, your frequently changing stuff last.
+That simple reordering creates the warm/cold build distinction:
+- **Warm build**: `app.R` changes, `renv.lock` unchanged → `renv::restore()` layer is cached, build takes 30s
+- **Cold build**: `renv.lock` changes → `renv::restore()` runs, takes 6-8 mins for the demo app (40 mins for NAS with 200+ packages)
+
+Put your stable stuff first, your frequently changing stuff last.
 
 ## How This Works in Production
 
@@ -295,17 +307,7 @@ RUN --mount=type=secret,id=github_pat \
 
 This keeps secrets out of your layers.
 
-### 2. Parallel Package Installation
-
-This is a small win but it adds up:
-
-```dockerfile
-RUN R -e "options(Ncpus = 4); renv::restore()"
-```
-
-Uses 4 cores to compile packages instead of 1. On a GitHub Actions runner, this shaved off another minute or two.
-
-### 3. Pick the Right Base Image
+### 2. Pick the Right Base Image
 
 Use `rocker/r2u` for significantly faster package installation through binary packages. This is especially beneficial for large projects with many dependencies.
 
