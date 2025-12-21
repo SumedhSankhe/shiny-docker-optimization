@@ -1,10 +1,12 @@
-# Optimizing R Shiny Docker Builds: A Multistage Approach
+# Optimizing R Shiny Docker Builds: From 40 Minutes to 10 Minutes
 
 [![Docker](https://img.shields.io/badge/docker-%230db7ed.svg?style=flat&logo=docker&logoColor=white)](https://www.docker.com/)
 [![R](https://img.shields.io/badge/r-%23276DC3.svg?style=flat&logo=r&logoColor=white)](https://www.r-project.org/)
 [![Shiny](https://img.shields.io/badge/Shiny-shinyapps.io-blue?style=flat&logo=RStudio&logoColor=white)](https://shiny.rstudio.com/)
 
-A practical demonstration of Docker optimization techniques for R Shiny applications, showing how multistage builds can reduce image size by 40-50% and improve build times through better layer caching.
+A practical demonstration of Docker optimization techniques for R Shiny applications, showing how multistage builds with rocker/r2u can reduce image size by 25% and improve build times by 80-94% through better layer caching and binary package installation.
+
+> **Blog Post:** [Read the full story](./blog-post.md) about optimizing Docker builds for a customer-facing R Shiny SaaS application running on Kubernetes.
 
 ## The Problem
 
@@ -59,21 +61,31 @@ docker run -p 3838:3838 shiny-app:optimized
 
 ## Performance Comparison
 
-| Metric | Single-Stage | Multistage | Improvement |
-|--------|-------------|------------|-------------|
-| **Image Size** | ~2.1 GB | ~1.2 GB | **43% smaller** |
-| **Build Time (cold)** | ~15 min | ~12 min | **20% faster** |
-| **Build Time (cached)** | ~8 min | ~30 sec | **94% faster** |
-| **Layers** | 12 | 8 (runtime) | **Cleaner** |
+Results from GitHub Container Registry (verified via GitHub Actions):
 
-*Results may vary based on dependencies and hardware*
+| Metric | Single-Stage | Two-Stage | Three-Stage | Improvement |
+|--------|-------------|-----------|-------------|-------------|
+| **Image Size (GHCR)** | 1.27 GB | 948 MB | 948 MB | **25% smaller** |
+| **Build Time (warm)** | 5-7 mins | ~30 sec | ~30 sec | **92-94% faster** |
+| **Build Time (cold)** | 8-10 mins | 6-8 mins | 6-8 mins | **20-25% faster** |
+
+**Key Features:**
+- Uses **rocker/r2u** for binary R package installation (faster than source compilation)
+- **Layer caching** separates dependencies from application code
+- **Multistage builds** exclude build tools from runtime image
+- **Production-ready** pattern used in customer-facing SaaS applications
+
+*See [blog-post.md](./blog-post.md) for production results with 200+ packages (1.5GB → 875MB, 42% reduction)*
 
 ## Architecture Deep Dive
 
 ### Single-Stage Build (Before)
 
 ```dockerfile
-FROM rocker/r-ver:4.3.2
+FROM rocker/r2u:24.04
+
+# Configure renv cache
+ENV RENV_PATHS_CACHE="/app/renv/.cache"
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
@@ -97,24 +109,34 @@ RUN R -e "renv::restore()"
 
 ```dockerfile
 # ============ STAGE 1: Builder ============
-FROM rocker/r-ver:4.3.2 AS builder
+FROM rocker/r2u:24.04 AS builder
+
+# Configure renv cache to use consistent path
+ENV RENV_PATHS_CACHE="/app/renv/.cache"
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y ...
+
+WORKDIR /app
 
 # Copy ONLY dependency files first (cached layer)
 COPY renv.lock renv.lock
 COPY .Rprofile .Rprofile
 COPY renv/activate.R renv/activate.R
+COPY renv/settings.json renv/settings.json
 
 # Install packages (cached unless renv.lock changes)
+RUN R -e "install.packages('renv', repos='https://cloud.r-project.org')"
 RUN R -e "renv::restore()"
 
 # Copy code AFTER dependencies
 COPY app.R app.R
 
 # ============ STAGE 2: Runtime ============
-FROM rocker/r-ver:4.3.2
+FROM rocker/r2u:24.04
+
+# Configure renv cache to match builder
+ENV RENV_PATHS_CACHE="/app/renv/.cache"
 
 # Install ONLY runtime dependencies
 RUN apt-get update && apt-get install -y \
@@ -122,9 +144,15 @@ RUN apt-get update && apt-get install -y \
     libssl3 \
     ...
 
-# Copy from builder
-COPY --from=builder /build/renv /app/renv
-COPY --from=builder /build/app.R /app/app.R
+WORKDIR /app
+
+# Copy from builder (includes renv cache)
+COPY --from=builder /app/renv /app/renv
+COPY --from=builder /app/.Rprofile /app/.Rprofile
+COPY --from=builder /app/renv.lock /app/renv.lock
+COPY --from=builder /app/app.R /app/app.R
+
+CMD ["R", "--vanilla", "-e", ".libPaths('/app/renv/library/linux-ubuntu-noble/R-4.5/x86_64-pc-linux-gnu'); shiny::runApp('/app', host='0.0.0.0', port=3838)"]
 ```
 
 **Improvements:**
@@ -205,14 +233,19 @@ shiny-docker-optimization/
    RUN apt-get install -y libpq5     # Runtime
    ```
 
-3. **Adjust base image** if needed:
+3. **Choose the right base image:**
    ```dockerfile
-   # Use specific R version
-   FROM rocker/r-ver:4.3.1 AS builder
-   
-   # Or use rocker/shiny for built-in Shiny Server
-   FROM rocker/shiny:4.3.2 AS builder
+   # Recommended: rocker/r2u for binary packages (faster builds)
+   FROM rocker/r2u:24.04 AS builder
+
+   # Alternative: rocker/r-ver for source compilation
+   FROM rocker/r-ver:4.5.2 AS builder
+
+   # For Shiny Server (if not using Kubernetes)
+   FROM rocker/shiny:4.5.2 AS builder
    ```
+
+   **Note:** rocker/r2u provides pre-compiled binary packages, dramatically reducing build times compared to source compilation. Highly recommended for production use.
 
 ### Production Considerations
 
@@ -223,7 +256,9 @@ shiny-docker-optimization/
 
 ## Related Resources
 
+- **[Blog Post](./blog-post.md)**: Full story of optimizing Docker builds for production R Shiny SaaS
 - [Docker Multistage Builds Documentation](https://docs.docker.com/build/building/multi-stage/)
+- [r2u: CRAN as Ubuntu Binaries](https://eddelbuettel.github.io/r2u/) - Binary R packages for Ubuntu
 - [renv: R Dependency Management](https://rstudio.github.io/renv/)
 - [Rocker Project: Docker Images for R](https://rocker-project.org/)
 - [Production-Grade Shiny Apps](https://engineering-shiny.org/)
@@ -249,6 +284,16 @@ MIT License - see LICENSE file for details
 
 ---
 
-If you found this helpful, consider starring the repository!
+**⭐ If you found this helpful, consider starring the repository!**
 
 Built with practical experience from deploying production R Shiny applications on Azure Kubernetes Service.
+
+## Real-World Impact
+
+This demo repository showcases the optimization pattern. In production at Alamar Biosciences:
+- **NULISA Analysis Software (NAS)**: Customer-facing SaaS with 200+ R packages
+- **Image size**: Reduced from 1.5GB to 875MB (42% smaller)
+- **Build times**: 40 minutes → 8-15 minutes for code changes (80% faster)
+- **Deployment**: Running on Azure Kubernetes Service, serving customers globally
+
+Read the [full blog post](./blog-post.md) for details on the production setup including base image management, cache-busting strategies, and CI/CD integration.
