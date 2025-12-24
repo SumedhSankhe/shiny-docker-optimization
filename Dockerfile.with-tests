@@ -1,0 +1,124 @@
+# ============================================================================
+# MULTI-STAGE BUILD WITH TEST GATE
+# ============================================================================
+# Tests run as part of the build - if tests fail, the image doesn't get built.
+# This ensures only tested code reaches production.
+#
+# Stages:
+#   1. builder  - Runs tests, installs packages
+#   2. runtime  - Production image (excludes tests/)
+#
+# Key features:
+#   - Tests as build gate (no image if tests fail)
+#   - JUnit XML output for CI integration
+#   - Cache busting for external packages
+#   - Clean runtime image (no test files)
+# ============================================================================
+
+# Base image passed as build arg (from Dockerfile.base with hash tag)
+ARG BASE_IMAGE
+
+# ============================================================================
+# STAGE 1: Builder - Run Tests
+# ============================================================================
+FROM ${BASE_IMAGE} AS builder
+
+# Cache bust arg - change this to force reinstall of external packages
+# Usage: --build-arg CACHE_BUST=$(date +%s)
+ARG CACHE_BUST=0
+
+WORKDIR /app
+
+# Copy entire application including tests
+COPY . /app/
+
+# Optional: Install additional packages not in renv.lock
+# This layer rebuilds when CACHE_BUST changes
+RUN echo "Cache bust: ${CACHE_BUST}" && \
+    echo "External packages would be installed here"
+# Example: R -e "renv::install('org/package@branch')"
+
+# ============================================================================
+# RUN TESTS - Build FAILS if tests fail
+# ============================================================================
+# This is the gate - no passing tests, no image
+RUN R -e "testthat::test_dir('tests/testthat', \
+    reporter = testthat::JunitReporter\$new(file = '/tmp/test-results.xml'), \
+    stop_on_failure = TRUE)"
+
+# Verify test results were generated
+RUN test -f /tmp/test-results.xml || \
+    (echo "ERROR: Test results not generated" && exit 1)
+
+# ============================================================================
+# STAGE 2: Production Runtime
+# ============================================================================
+# This stage only builds if tests passed in builder stage
+FROM rocker/r2u:24.04 AS runtime
+
+LABEL description="Production runtime (tests excluded)"
+
+ENV RENV_PATHS_CACHE="/app/renv/.cache"
+
+# Install ONLY runtime system dependencies (no -dev packages)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libcurl4 \
+    libssl3 \
+    libxml2 \
+    libfontconfig1 \
+    libharfbuzz0b \
+    libfribidi0 \
+    libfreetype6 \
+    libpng16-16t64 \
+    libtiff6 \
+    libjpeg-turbo8 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy ONLY production artifacts from builder (excludes tests/)
+COPY --from=builder /app/renv/ /app/renv/
+COPY --from=builder /app/.Rprofile /app/.Rprofile
+COPY --from=builder /app/renv.lock /app/renv.lock
+COPY --from=builder /app/app.R /app/app.R
+
+# NOTE: Explicitly NOT copying:
+# - tests/
+# - /tmp/test-results.xml
+# These remain in builder stage only
+
+# Create non-root user for security
+RUN groupadd --system app && \
+    useradd --system --gid app app && \
+    chown -R app:app /app
+
+USER app
+
+EXPOSE 3838
+
+CMD ["R", "--vanilla", "-e", ".libPaths('/app/renv/library/linux-ubuntu-noble/R-4.5/x86_64-pc-linux-gnu'); shiny::runApp('/app', host = '0.0.0.0', port = 3838)"]
+
+# ============================================================================
+# Build Commands:
+# ============================================================================
+#
+# 1. First, build or pull base image:
+#    RENV_HASH=$(sha256sum renv.lock | cut -c1-12)
+#    docker build -f Dockerfile.base -t shiny-app-base:${RENV_HASH} .
+#
+# 2. Build app with tests:
+#    docker build -f Dockerfile.with-tests \
+#      --build-arg BASE_IMAGE=shiny-app-base:${RENV_HASH} \
+#      --build-arg CACHE_BUST=$(date +%s) \
+#      -t shiny-app:tested .
+#
+# 3. If tests fail, build aborts - no image created
+#
+# 4. Extract test results from failed build:
+#    docker build --target builder \
+#      --build-arg BASE_IMAGE=shiny-app-base:${RENV_HASH} \
+#      -t temp-builder . || true
+#    docker create --name temp temp-builder
+#    docker cp temp:/tmp/test-results.xml ./test-results.xml
+#    docker rm temp
+# ============================================================================
