@@ -1,0 +1,171 @@
+name: Build with Hash-Based Caching
+
+# Demonstrates Part 2 concepts:
+# 1. Hash-based base image caching
+# 2. Cache busting for external packages
+# 3. Tests as build gate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      cache-bust:
+        description: 'Force rebuild of package layer'
+        required: false
+        type: string
+        default: ''
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build-with-tests:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # ========================================================================
+      # HASH-BASED BASE IMAGE CACHING
+      # ========================================================================
+      - name: Compute renv.lock hash
+        id: renv-hash
+        run: |
+          RENV_HASH=$(sha256sum renv.lock | cut -c1-12)
+          echo "hash=${RENV_HASH}" >> $GITHUB_OUTPUT
+          echo "::notice::renv.lock hash: ${RENV_HASH}"
+
+      - name: Check if base image exists
+        id: check-base
+        run: |
+          # Lowercase for Docker registry
+          IMAGE_LOWER=$(echo "${{ env.IMAGE_NAME }}" | tr '[:upper:]' '[:lower:]')
+          BASE_TAG="${{ env.REGISTRY }}/${IMAGE_LOWER}-base:${{ steps.renv-hash.outputs.hash }}"
+
+          echo "base_tag=${BASE_TAG}" >> $GITHUB_OUTPUT
+
+          if docker pull "${BASE_TAG}" 2>/dev/null; then
+            echo "::notice::Base image found in registry (using cache)"
+            echo "needs_build=false" >> $GITHUB_OUTPUT
+          else
+            echo "::notice::Base image not found (will build)"
+            echo "needs_build=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Build and push base image (if needed)
+        if: steps.check-base.outputs.needs_build == 'true'
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile.base
+          push: true
+          tags: ${{ steps.check-base.outputs.base_tag }}
+          build-args: |
+            RENV_HASH=${{ steps.renv-hash.outputs.hash }}
+          cache-from: type=gha,scope=base
+          cache-to: type=gha,mode=max,scope=base
+
+      # ========================================================================
+      # BUILD APP WITH TESTS (uses base image)
+      # ========================================================================
+      - name: Determine cache bust value
+        id: cache-bust
+        run: |
+          if [ -n "${{ inputs.cache-bust }}" ]; then
+            echo "value=${{ inputs.cache-bust }}" >> $GITHUB_OUTPUT
+          else
+            # Default: use run ID for unique builds
+            echo "value=${{ github.run_id }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Build app with tests
+        id: build-app
+        continue-on-error: true
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile.with-tests
+          target: runtime
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:with-tests-latest
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:with-tests-${{ github.sha }}
+          build-args: |
+            BASE_IMAGE=${{ steps.check-base.outputs.base_tag }}
+            CACHE_BUST=${{ steps.cache-bust.outputs.value }}
+          cache-from: type=gha,scope=app
+          cache-to: type=gha,mode=max,scope=app
+
+      # ========================================================================
+      # EXTRACT TEST RESULTS (even if build failed)
+      # ========================================================================
+      - name: Extract test results from builder stage
+        if: always()
+        run: |
+          IMAGE_LOWER=$(echo "${{ env.IMAGE_NAME }}" | tr '[:upper:]' '[:lower:]')
+
+          # Build just the builder stage to extract test results
+          docker build \
+            --target builder \
+            --build-arg BASE_IMAGE=${{ steps.check-base.outputs.base_tag }} \
+            --build-arg CACHE_BUST=${{ steps.cache-bust.outputs.value }} \
+            -f Dockerfile.with-tests \
+            -t temp-builder . || true
+
+          # Extract test results
+          docker create --name temp temp-builder 2>/dev/null || true
+          docker cp temp:/tmp/test-results.xml ./test-results.xml 2>/dev/null || true
+          docker rm temp 2>/dev/null || true
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: test-results.xml
+          if-no-files-found: ignore
+
+      # ========================================================================
+      # FAIL IF TESTS FAILED
+      # ========================================================================
+      - name: Check build status
+        if: steps.build-app.outcome != 'success'
+        run: |
+          echo "::error::Build failed - tests may have failed"
+          exit 1
+
+      # ========================================================================
+      # BUILD SUMMARY
+      # ========================================================================
+      - name: Generate build summary
+        if: success()
+        run: |
+          echo "## Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Component | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| renv.lock hash | \`${{ steps.renv-hash.outputs.hash }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Base image rebuilt | ${{ steps.check-base.outputs.needs_build }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Cache bust value | \`${{ steps.cache-bust.outputs.value }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Images" >> $GITHUB_STEP_SUMMARY
+          echo "- Base: \`${{ steps.check-base.outputs.base_tag }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- App: \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:with-tests-latest\`" >> $GITHUB_STEP_SUMMARY
