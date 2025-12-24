@@ -6,7 +6,9 @@
 
 A practical demonstration of Docker optimization techniques for R Shiny applications, showing how multistage builds with rocker/r2u can reduce image size by 25% and improve build times by 80-94% through better layer caching and binary package installation.
 
-> **Blog Post:** [Read the full story](./blog-post.md) about optimizing Docker builds for a customer-facing R Shiny SaaS application running on Kubernetes.
+> **Blog Post Series:**
+> - **[Part 1: Multistage Builds & Layer Caching](./blog-post.md)** - The foundation: reducing build times by 80-94% and image sizes by 25%
+> - **[Part 2: Intelligent Caching Strategies](./blog-post-part-2.md)** - Advanced patterns: hash-based base images, cache busting, and tests as build gates
 
 ## The Problem
 
@@ -205,15 +207,29 @@ COPY app.R .
 
 ```
 shiny-docker-optimization/
-├── app.R                      # Example Shiny application
-├── Dockerfile.single-stage    # Before: Single-stage build
-├── Dockerfile.multistage      # After: Optimized multistage build
-├── renv.lock                  # R package dependencies
-├── .Rprofile                  # renv activation
+├── app.R                          # Example Shiny application
+├── blog-post.md                   # Part 1: Multistage builds
+├── blog-post-part-2.md            # Part 2: Intelligent caching
+├── Dockerfile.single-stage        # Before: Single-stage build
+├── Dockerfile.multistage          # After: Optimized two-stage build
+├── Dockerfile.three-stage         # Advanced: Three-stage build
+├── Dockerfile.base                # Part 2: Base image with hash-based caching
+├── Dockerfile.with-tests          # Part 2: Multistage with test gate
+├── docker-compose.yml             # Multi-profile compose file
+├── test-build-times.sh            # Local build velocity testing script
+├── renv.lock                      # R package dependencies
+├── .Rprofile                      # renv activation
 ├── renv/
-│   ├── activate.R             # renv bootstrap script
-│   └── settings.json          # renv configuration
-└── README.md                  # This file
+│   ├── activate.R                 # renv bootstrap script
+│   └── settings.json              # renv configuration
+├── tests/
+│   └── testthat/
+│       └── test-app.R             # Part 2: Test suite
+├── .github/
+│   └── workflows/
+│       ├── docker-build-push.yml  # Part 1: CI/CD workflow
+│       └── docker-build-with-cache.yml  # Part 2: Intelligent caching workflow
+└── README.md                      # This file
 ```
 
 ## Customization Guide

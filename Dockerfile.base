@@ -1,0 +1,70 @@
+# ============================================================================
+# BASE IMAGE: Hash-Based Caching Layer
+# ============================================================================
+# This image contains all renv.lock dependencies and is tagged with the
+# SHA256 hash of renv.lock. It only rebuilds when dependencies change.
+#
+# Tag format: shiny-app-base:<version>-<renv-hash>
+# Example:    shiny-app-base:main-a3b2c1d4e5f6
+#
+# Usage in CI:
+#   RENV_HASH=$(sha256sum renv.lock | cut -c1-12)
+#   BASE_TAG="shiny-app-base:${BRANCH}-${RENV_HASH}"
+#   if ! docker pull registry/${BASE_TAG}; then
+#     docker build -f Dockerfile.base -t registry/${BASE_TAG} .
+#   fi
+# ============================================================================
+
+FROM rocker/r2u:24.04
+
+LABEL maintainer="Your Name" \
+      description="Base image with renv.lock dependencies"
+
+# Configure renv cache path (must match app Dockerfile)
+ENV RENV_PATHS_CACHE="/app/renv/.cache"
+
+WORKDIR /app
+
+# Copy ONLY renv configuration files
+# These are the cache key - changes here trigger rebuild
+COPY renv.lock renv.lock
+COPY .Rprofile .Rprofile
+COPY renv/activate.R renv/activate.R
+COPY renv/settings.json renv/settings.json
+
+# Install system dependencies for R packages
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libcurl4-openssl-dev \
+    libssl-dev \
+    libxml2-dev \
+    libfontconfig1-dev \
+    libharfbuzz-dev \
+    libfribidi-dev \
+    libfreetype6-dev \
+    libpng-dev \
+    libtiff5-dev \
+    libjpeg-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create renv cache directory
+RUN mkdir -p ${RENV_PATHS_CACHE}
+
+# Install renv and restore all packages from lock file
+RUN R -e "install.packages('renv', repos = 'https://cloud.r-project.org')"
+RUN R -e "options(renv.consent = TRUE); renv::restore()"
+
+# Verify installation
+RUN R -e "cat('Base image ready\n'); renv::status()"
+
+# Label with renv.lock hash for traceability
+# Set via: --build-arg RENV_HASH=$(sha256sum renv.lock | cut -c1-12)
+ARG RENV_HASH
+LABEL renv.lock.hash="${RENV_HASH}"
+
+# ============================================================================
+# Build Command:
+#   RENV_HASH=$(sha256sum renv.lock | cut -c1-12)
+#   docker build -f Dockerfile.base \
+#     --build-arg RENV_HASH=${RENV_HASH} \
+#     -t shiny-app-base:main-${RENV_HASH} .
+# ============================================================================
